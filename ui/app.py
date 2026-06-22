@@ -150,7 +150,7 @@ with tab2:
 
         col3, col4 = st.columns(2)
         month_name = col3.selectbox("Month", list(MONTH_OPTIONS.keys()), index=6)
-        year = col4.selectbox("Year", [2024, 2025, 2026], index=1)
+        year = col4.selectbox("Year", [2026, 2027], index=1)
 
         submitted = st.form_submit_button("Forecast Revenue", use_container_width=True)
 

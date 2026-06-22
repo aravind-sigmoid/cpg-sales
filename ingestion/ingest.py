@@ -13,6 +13,7 @@ import os
 import sys
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 from sqlalchemy.dialects.postgresql import insert
 
@@ -31,6 +32,24 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
+def _native_types(records: list[dict]) -> list[dict]:
+    """Convert numpy scalar types to Python natives so psycopg2 can serialize them."""
+    out = []
+    for rec in records:
+        row = {}
+        for k, v in rec.items():
+            if isinstance(v, np.integer):
+                row[k] = int(v)
+            elif isinstance(v, np.floating):
+                row[k] = float(v)
+            elif isinstance(v, np.bool_):
+                row[k] = bool(v)
+            else:
+                row[k] = v
+        out.append(row)
+    return out
+
+
 # ── Reference loaders ─────────────────────────────────────────────────────────
 
 def load_product_catalog(session) -> set[str]:
@@ -45,7 +64,7 @@ def load_product_catalog(session) -> set[str]:
     df["is_active"] = df["is_active"].astype(bool)
     df["updated_at"] = datetime.utcnow()
 
-    records = df.to_dict(orient="records")
+    records = _native_types(df.to_dict(orient="records"))
     stmt = insert(ProductCatalog).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["sku"],
@@ -68,7 +87,7 @@ def load_store_regions(session) -> set[str]:
     df["store_id"] = df["store_id"].str.upper().str.strip()
     df["updated_at"] = datetime.utcnow()
 
-    records = df.to_dict(orient="records")
+    records = _native_types(df.to_dict(orient="records"))
     stmt = insert(StoreRegion).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["store_id"],
