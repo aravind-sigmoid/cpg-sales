@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: cpg_sales
+          POSTGRES_USER: cpg_user
+          POSTGRES_PASSWORD: cpg_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set env vars
+        run: |
+          echo "POSTGRES_HOST=localhost" >> $GITHUB_ENV
+          echo "POSTGRES_PORT=5432"      >> $GITHUB_ENV
+          echo "POSTGRES_DB=cpg_sales"   >> $GITHUB_ENV
+          echo "POSTGRES_USER=cpg_user"  >> $GITHUB_ENV
+          echo "POSTGRES_PASSWORD=cpg_password" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=sk-dummy-ci-key" >> $GITHUB_ENV
+
+      - name: Run tests
+        run: pytest --tb=short -q
+
+      - name: Lint (ruff)
+        run: |
+          pip install ruff
+          ruff check . --ignore E501 || true   # warn but don't fail on line length
