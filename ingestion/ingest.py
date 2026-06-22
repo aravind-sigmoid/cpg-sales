@@ -13,6 +13,7 @@ import os
 import sys
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 from sqlalchemy.dialects.postgresql import insert
 
@@ -31,6 +32,24 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
+def _native_types(records: list[dict]) -> list[dict]:
+    """Convert numpy scalar types to Python natives so psycopg2 can serialize them."""
+    out = []
+    for rec in records:
+        row = {}
+        for k, v in rec.items():
+            if isinstance(v, np.integer):
+                row[k] = int(v)
+            elif isinstance(v, np.floating):
+                row[k] = float(v)
+            elif isinstance(v, np.bool_):
+                row[k] = bool(v)
+            else:
+                row[k] = v
+        out.append(row)
+    return out
+
+
 # ── Reference loaders ─────────────────────────────────────────────────────────
 
 def load_product_catalog(session) -> set[str]:
@@ -45,7 +64,7 @@ def load_product_catalog(session) -> set[str]:
     df["is_active"] = df["is_active"].astype(bool)
     df["updated_at"] = datetime.utcnow()
 
-    records = df.to_dict(orient="records")
+    records = _native_types(df.to_dict(orient="records"))
     stmt = insert(ProductCatalog).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["sku"],
@@ -68,7 +87,7 @@ def load_store_regions(session) -> set[str]:
     df["store_id"] = df["store_id"].str.upper().str.strip()
     df["updated_at"] = datetime.utcnow()
 
-    records = df.to_dict(orient="records")
+    records = _native_types(df.to_dict(orient="records"))
     stmt = insert(StoreRegion).values(records)
     stmt = stmt.on_conflict_do_update(
         index_elements=["store_id"],
@@ -111,21 +130,21 @@ def ingest_transactions(
             if "source_system" in valid_df.columns
             else "UNKNOWN"
         )
-        records = [
+        records = _native_types([
             {
-                "transaction_id": row.transaction_id,
+                "transaction_id": str(row.transaction_id),
                 "transaction_date": row.transaction_date,
-                "sku": row.sku,
+                "sku": str(row.sku),
                 "quantity": int(row.quantity),
                 "unit_price": float(row.unit_price),
                 "revenue": float(row.revenue),
-                "region": _lookup_region(row.store_id, session),
-                "store_id": row.store_id,
-                "source_system": row.source_system if hasattr(row, "source_system") else "UNKNOWN",
+                "region": _lookup_region(str(row.store_id), session),
+                "store_id": str(row.store_id),
+                "source_system": str(row.source_system) if hasattr(row, "source_system") else "UNKNOWN",
                 "ingested_at": datetime.utcnow(),
             }
             for row in valid_df.itertuples()
-        ]
+        ])
         stmt = insert(SalesTransaction).values(records)
         stmt = stmt.on_conflict_do_nothing(
             constraint="uq_txn_source"
@@ -137,10 +156,10 @@ def ingest_transactions(
     # Audit log
     log_entry = IngestionLog(
         source_file=os.path.basename(file_path),
-        rows_received=stats.rows_received,
-        rows_valid=stats.rows_valid,
-        rows_rejected=stats.rows_rejected,
-        rows_duplicate=stats.rows_duplicate,
+        rows_received=int(stats.rows_received),
+        rows_valid=int(stats.rows_valid),
+        rows_rejected=int(stats.rows_rejected),
+        rows_duplicate=int(stats.rows_duplicate),
         notes=str(stats.rejection_reasons),
     )
     session.add(log_entry)

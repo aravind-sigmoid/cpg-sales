@@ -11,48 +11,76 @@ import pandas as pd
 import pytest
 from sklearn.ensemble import RandomForestRegressor
 
-from ml.features import build_features, get_feature_columns
+from ml.features import aggregate_monthly, build_features, get_feature_columns
 from ml.predict import predict_revenue
 
 
-# ── Feature engineering ───────────────────────────────────────────────────────
+# ── Sample data helpers ───────────────────────────────────────────────────────
 
-def _sample_df(n=50):
+def _raw_txn_df(n=200):
+    """Simulate raw transaction rows as returned from Postgres."""
+    dates = pd.date_range("2022-01-01", periods=n, freq="3D")
     return pd.DataFrame({
-        "transaction_date": pd.date_range("2024-01-01", periods=n, freq="W"),
+        "transaction_date": dates,
         "category": np.random.choice(["Beverages", "Snacks", "Dairy"], n),
         "region": np.random.choice(["Northeast", "West", "Midwest"], n),
         "revenue": np.random.uniform(10, 500, n),
     })
 
 
-def test_build_features_adds_time_columns():
-    df = _sample_df()
-    result = build_features(df)
-    for col in ["month", "quarter", "day_of_week", "week_of_year"]:
-        assert col in result.columns
+# ── Aggregation ───────────────────────────────────────────────────────────────
 
+def test_aggregate_monthly_reduces_rows():
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    assert len(agg) < len(raw)
+    assert "total_revenue" in agg.columns
+    assert "transaction_count" in agg.columns
+
+
+def test_aggregate_monthly_adds_time_columns():
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    for col in ["year", "month", "quarter"]:
+        assert col in agg.columns
+
+
+def test_aggregate_monthly_revenue_sums_correctly():
+    raw = pd.DataFrame({
+        "transaction_date": ["2024-01-10", "2024-01-20", "2024-02-05"],
+        "category": ["Beverages", "Beverages", "Beverages"],
+        "region": ["Northeast", "Northeast", "Northeast"],
+        "revenue": [100.0, 200.0, 150.0],
+    })
+    agg = aggregate_monthly(raw)
+    jan = agg[(agg["month"] == 1) & (agg["year"] == 2024)]
+    assert abs(jan["total_revenue"].values[0] - 300.0) < 0.01
+
+
+# ── Feature engineering ───────────────────────────────────────────────────────
 
 def test_build_features_ohe_categoricals():
-    df = _sample_df()
-    result = build_features(df)
-    # One-hot encoded columns should be present
-    ohe_cols = [c for c in result.columns if c.startswith("category_") or c.startswith("region_")]
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    feat_df = build_features(agg)
+    ohe_cols = [c for c in feat_df.columns if c.startswith("category_") or c.startswith("region_")]
     assert len(ohe_cols) > 0
 
 
-def test_get_feature_columns_returns_list():
-    df = _sample_df()
-    feat_df = build_features(df)
+def test_get_feature_columns_includes_numeric():
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    feat_df = build_features(agg)
     cols = get_feature_columns(feat_df)
-    assert isinstance(cols, list)
-    assert len(cols) > 0
     assert "month" in cols
+    assert "quarter" in cols
+    assert "year" in cols
 
 
 def test_no_missing_values_in_features():
-    df = _sample_df()
-    feat_df = build_features(df)
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    feat_df = build_features(agg)
     feature_cols = get_feature_columns(feat_df)
     assert feat_df[feature_cols].isna().sum().sum() == 0
 
@@ -60,54 +88,39 @@ def test_no_missing_values_in_features():
 # ── Prediction ────────────────────────────────────────────────────────────────
 
 def _make_temp_model(feature_cols):
-    """Create and save a minimal model to a temp directory."""
-    X = pd.DataFrame(np.zeros((10, len(feature_cols))), columns=feature_cols)
-    y = np.random.uniform(100, 500, 10)
+    X = pd.DataFrame(np.zeros((20, len(feature_cols))), columns=feature_cols)
+    y = np.random.uniform(5000, 50000, 20)
     model = RandomForestRegressor(n_estimators=2, random_state=42)
     model.fit(X, y)
-    return model, {"feature_cols": feature_cols, "mae": 50.0, "r2": 0.85}
+    return model, {"feature_cols": feature_cols, "mae": 1000.0, "r2": 0.85, "training_rows": 20}
 
 
 def test_predict_revenue_returns_expected_keys():
-    df = _sample_df(100)
-    feat_df = build_features(df)
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    feat_df = build_features(agg)
     feature_cols = get_feature_columns(feat_df)
     model, meta = _make_temp_model(feature_cols)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        model_path = os.path.join(tmpdir, "model.joblib")
-        meta_path = os.path.join(tmpdir, "model_meta.joblib")
-        joblib.dump(model, model_path)
-        joblib.dump(meta, meta_path)
-
-        with patch("ml.predict.MODEL_PATH", model_path), \
-             patch("ml.predict.META_PATH", meta_path), \
-             patch("ml.predict._load_model", return_value=(model, meta)):
-            result = predict_revenue(
-                category="Beverages",
-                region="Northeast",
-                month=7,
-            )
+    with patch("ml.predict._load_model", return_value=(model, meta)):
+        result = predict_revenue(category="Beverages", region="Northeast", month=7, year=2025)
 
     assert "predicted_revenue" in result
     assert "model_mae" in result
     assert "model_r2" in result
-    assert result["predicted_revenue"] > 0
+    assert result["predicted_revenue"] >= 0
 
 
-def test_predict_revenue_unknown_category_defaults():
-    """Unknown category should still return a prediction (just with no OHE match)."""
-    df = _sample_df(100)
-    feat_df = build_features(df)
+def test_predict_revenue_unknown_category_returns_float():
+    """Unknown category should still return a non-negative prediction."""
+    raw = _raw_txn_df(200)
+    agg = aggregate_monthly(raw)
+    feat_df = build_features(agg)
     feature_cols = get_feature_columns(feat_df)
     model, meta = _make_temp_model(feature_cols)
 
-    with patch("ml.predict.MODEL_PATH", "/tmp/m.joblib"), \
-         patch("ml.predict.META_PATH", "/tmp/mm.joblib"), \
-         patch("ml.predict._load_model", return_value=(model, meta)):
-        result = predict_revenue(
-            category="NonExistentCategory",
-            region="Northeast",
-            month=3,
-        )
+    with patch("ml.predict._load_model", return_value=(model, meta)):
+        result = predict_revenue(category="NonExistent", region="Northeast", month=3, year=2025)
+
     assert isinstance(result["predicted_revenue"], float)
+    assert result["predicted_revenue"] >= 0

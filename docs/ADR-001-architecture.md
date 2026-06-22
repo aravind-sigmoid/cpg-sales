@@ -1,6 +1,6 @@
 # ADR-001: System Architecture for CPG Sales Intelligence
 
-**Date:** 2024-06-18  
+**Date:** 2026-06-18  
 **Status:** Accepted  
 **Deciders:** Aravind Aitipamula
 
@@ -65,7 +65,7 @@ generate_data.py → raw CSVs → ingestion/ingest.py → Postgres
 | Flask | Less ergonomic than FastAPI for request validation and auto-docs |
 | XGBoost | More performant than RF but no meaningful gain at skeleton scale |
 | Dash (Plotly) | More code than Streamlit for same result |
-| dbt for transforms | Overkill for a 2-week skeleton; adds infra complexity |
+| dbt for transforms | Overkill for a skeleton; adds infra complexity |
 
 ---
 

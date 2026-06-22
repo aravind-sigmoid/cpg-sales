@@ -19,6 +19,14 @@ router = APIRouter(prefix="/insights", tags=["insights"])
 
 _openai_client: OpenAI | None = None
 
+# Shared formatting rule injected into every system prompt so the LLM
+# never emits markdown symbols that Streamlit would misrender.
+_NO_MARKDOWN = (
+    "Important: write plain text only. "
+    "Do not use markdown — no asterisks, no underscores, no hashes, no bullet dashes. "
+    "Use plain paragraph breaks only."
+)
+
 
 def get_openai_client() -> OpenAI:
     global _openai_client
@@ -37,7 +45,7 @@ def _call_llm(system_prompt: str, user_message: str) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            max_tokens=500,
+            max_tokens=600,
             temperature=0.3,
         )
         return response.choices[0].message.content.strip()
@@ -52,46 +60,100 @@ def _call_llm(system_prompt: str, user_message: str) -> str:
 # ── Data context helpers ───────────────────────────────────────────────────────
 
 def _get_summary_context(db: Session) -> str:
-    """Build a concise text summary of DB metrics for the LLM context."""
-    metrics_query = sa.text("""
+    """Build a rich text summary of DB metrics for the LLM, including growth signals."""
+
+    # Overall totals
+    m = db.execute(sa.text("""
         SELECT
             COUNT(*)                        AS total_txns,
             ROUND(SUM(revenue)::numeric, 2) AS total_revenue,
             MIN(transaction_date)           AS earliest,
             MAX(transaction_date)           AS latest
         FROM sales_transactions
-    """)
-    m = db.execute(metrics_query).fetchone()
+    """)).fetchone()
 
-    cat_query = sa.text("""
+    # Revenue by category
+    cats = db.execute(sa.text("""
         SELECT p.category, ROUND(SUM(t.revenue)::numeric, 2) AS rev
         FROM sales_transactions t
         JOIN product_catalog p ON t.sku = p.sku
         GROUP BY p.category ORDER BY rev DESC
-    """)
-    cats = db.execute(cat_query).fetchall()
+    """)).fetchall()
 
-    region_query = sa.text("""
+    # Revenue by region
+    regions = db.execute(sa.text("""
         SELECT region, ROUND(SUM(revenue)::numeric, 2) AS rev
         FROM sales_transactions GROUP BY region ORDER BY rev DESC
-    """)
-    regions = db.execute(region_query).fetchall()
+    """)).fetchall()
 
-    monthly_query = sa.text("""
+    # Year-over-year revenue by region (last two full years)
+    yoy_region = db.execute(sa.text("""
+        SELECT
+            region,
+            EXTRACT(YEAR FROM transaction_date)       AS yr,
+            ROUND(SUM(revenue)::numeric, 2)           AS rev
+        FROM sales_transactions
+        WHERE EXTRACT(YEAR FROM transaction_date) >= EXTRACT(YEAR FROM NOW()) - 2
+        GROUP BY region, yr
+        ORDER BY region, yr
+    """)).fetchall()
+
+    # Year-over-year revenue by category
+    yoy_cat = db.execute(sa.text("""
+        SELECT
+            p.category,
+            EXTRACT(YEAR FROM t.transaction_date)     AS yr,
+            ROUND(SUM(t.revenue)::numeric, 2)         AS rev
+        FROM sales_transactions t
+        JOIN product_catalog p ON t.sku = p.sku
+        WHERE EXTRACT(YEAR FROM t.transaction_date) >= EXTRACT(YEAR FROM NOW()) - 2
+        GROUP BY p.category, yr
+        ORDER BY p.category, yr
+    """)).fetchall()
+
+    # Last 6 months trend
+    monthly = db.execute(sa.text("""
         SELECT
             TO_CHAR(DATE_TRUNC('month', transaction_date), 'YYYY-MM') AS month,
             ROUND(SUM(revenue)::numeric, 2) AS rev
         FROM sales_transactions
         GROUP BY 1 ORDER BY 1 DESC LIMIT 6
-    """)
-    monthly = db.execute(monthly_query).fetchall()
+    """)).fetchall()
+
+    # Build YoY growth strings
+    def _yoy_lines(rows, key_attr):
+        """Group rows by key and compute % change between consecutive years."""
+        from collections import defaultdict
+        by_key = defaultdict(dict)
+        for r in rows:
+            by_key[getattr(r, key_attr)][int(r.yr)] = float(r.rev)
+        lines = []
+        for name, yr_map in sorted(by_key.items()):
+            years = sorted(yr_map)
+            if len(years) >= 2:
+                prev, curr = yr_map[years[-2]], yr_map[years[-1]]
+                pct = ((curr - prev) / prev * 100) if prev else 0
+                direction = "up" if pct >= 0 else "down"
+                lines.append(
+                    f"{name}: {int(years[-2])} ${prev:,.0f} -> {int(years[-1])} ${curr:,.0f} "
+                    f"({direction} {abs(pct):.1f}%)"
+                )
+            else:
+                lines.append(f"{name}: only one year of data (${yr_map[years[0]]:,.0f})")
+        return lines
+
+    region_growth = _yoy_lines(yoy_region, "region")
+    cat_growth = _yoy_lines(yoy_cat, "category")
 
     ctx = (
-        f"Dataset: {m.total_txns} transactions, total revenue ${m.total_revenue:,}, "
-        f"period {m.earliest} to {m.latest}.\n"
-        f"Revenue by category: {', '.join(f'{r.category} ${r.rev:,}' for r in cats)}.\n"
-        f"Revenue by region: {', '.join(f'{r.region} ${r.rev:,}' for r in regions)}.\n"
-        f"Last 6 months revenue: {', '.join(f'{r.month} ${r.rev:,}' for r in monthly)}."
+        f"Dataset overview: {m.total_txns} transactions, total revenue ${m.total_revenue:,}, "
+        f"period {m.earliest} to {m.latest}.\n\n"
+        f"Revenue by category (all time): {', '.join(f'{r.category} ${r.rev:,}' for r in cats)}.\n\n"
+        f"Revenue by region (all time): {', '.join(f'{r.region} ${r.rev:,}' for r in regions)}.\n\n"
+        f"Year-over-year growth by region:\n" + "\n".join(f"  {l}" for l in region_growth) + "\n\n"
+        f"Year-over-year growth by category:\n" + "\n".join(f"  {l}" for l in cat_growth) + "\n\n"
+        f"Last 6 months revenue (most recent first): "
+        f"{', '.join(f'{r.month} ${r.rev:,}' for r in monthly)}."
     )
     return ctx
 
@@ -105,12 +167,14 @@ def get_summary(db: Session = Depends(get_db)):
 
     system_prompt = (
         "You are a senior data analyst for a CPG company. "
-        "Write concise, executive-ready insights. No bullet points — flowing prose only. "
-        "Highlight what's working, what's declining, and one actionable recommendation."
+        "Write concise, executive-ready insights in flowing prose. "
+        "No bullet points. Highlight what is growing, what is declining, "
+        "and give one actionable recommendation. "
+        + _NO_MARKDOWN
     )
     user_message = (
         f"Here is a summary of our sales data:\n\n{context}\n\n"
-        "Write a 2–3 paragraph executive summary of our sales performance."
+        "Write a 2 to 3 paragraph executive summary of our sales performance."
     )
 
     narrative = _call_llm(system_prompt, user_message)
@@ -128,11 +192,13 @@ def query_insights(req: QueryRequest, db: Session = Depends(get_db)):
 
     system_prompt = (
         "You are a data analyst assistant for a CPG company. "
-        "Answer the user's question based only on the data provided. "
-        "Be concise and factual. If the data doesn't support an answer, say so."
+        "Answer the user's question using only the data provided. "
+        "Be specific and quantitative where possible. "
+        "If the data does not support a precise answer, say what you can infer and why. "
+        + _NO_MARKDOWN
     )
     user_message = (
-        f"Sales data context:\n{context}\n\n"
+        f"Sales data context:\n\n{context}\n\n"
         f"Question: {req.question}"
     )
 

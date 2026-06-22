@@ -36,33 +36,22 @@ def test_root():
 @patch("api.routes.predictions.predict_revenue")
 def test_predict_valid(mock_predict, mock_ready):
     mock_predict.return_value = {
-        "predicted_revenue": 1500.0,
-        "model_mae": 200.0,
-        "model_r2": 0.82,
+        "predicted_revenue": 42500.0,
+        "model_mae": 1200.0,
+        "model_r2": 0.88,
     }
-    payload = {
-        "category": "Beverages",
-        "region": "Northeast",
-        "month": 7,
-        "day_of_week": 1,
-        "week_of_year": 28,
-    }
+    payload = {"category": "Beverages", "region": "Northeast", "month": 7, "year": 2025}
     r = client.post("/predict/", json=payload)
     assert r.status_code == 200
     data = r.json()
-    assert data["predicted_revenue"] == 1500.0
+    assert data["predicted_revenue"] == 42500.0
+    assert data["month_name"] == "July"
     assert "confidence_note" in data
 
 
 @patch("api.routes.predictions.model_is_ready", return_value=False)
 def test_predict_model_not_trained(mock_ready):
-    payload = {
-        "category": "Snacks",
-        "region": "West",
-        "month": 3,
-        "day_of_week": 0,
-        "week_of_year": 10,
-    }
+    payload = {"category": "Snacks", "region": "West", "month": 3, "year": 2025}
     r = client.post("/predict/", json=payload)
     assert r.status_code == 503
 

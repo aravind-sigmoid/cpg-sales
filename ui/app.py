@@ -11,9 +11,19 @@ from __future__ import annotations
 import os
 import sys
 
+import re
+
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+
+
+def clean_llm_text(text: str) -> str:
+    """Strip markdown symbols so st.write() renders plain wrapping prose."""
+    text = re.sub(r'[*_`#]', '', text)       # remove bold/italic/code/heading markers
+    text = re.sub(r'^\s*[-•]\s+', '', text, flags=re.MULTILINE)  # remove bullet dashes
+    text = re.sub(r'\n{3,}', '\n\n', text)   # collapse excessive blank lines
+    return text.strip()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -133,9 +143,15 @@ with tab1:
 # ─────────────────────────────────────────────────────────────────────────────
 # Tab 2 — Predictions
 # ─────────────────────────────────────────────────────────────────────────────
+MONTH_OPTIONS = {
+    "January": 1, "February": 2, "March": 3, "April": 4,
+    "May": 5, "June": 6, "July": 7, "August": 8,
+    "September": 9, "October": 10, "November": 11, "December": 12,
+}
+
 with tab2:
-    st.subheader("Revenue Forecast")
-    st.write("Enter parameters to get a predicted revenue for a category-region-time combination.")
+    st.subheader("Monthly Revenue Forecast")
+    st.write("Select a category, region, and month to forecast total revenue for that period.")
 
     with st.form("predict_form"):
         col1, col2 = st.columns(2)
@@ -143,28 +159,25 @@ with tab2:
         region = col2.selectbox("Region", ["Northeast", "Southeast", "Midwest", "West", "Southwest"])
 
         col3, col4 = st.columns(2)
-        month = col3.slider("Month", min_value=1, max_value=12, value=7)
-        day_of_week = col4.selectbox("Day of Week", options=list(range(7)),
-                                      format_func=lambda x: ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][x])
+        month_name = col3.selectbox("Month", list(MONTH_OPTIONS.keys()), index=6)
+        year = col4.selectbox("Year", [2026, 2027], index=1)
 
-        submitted = st.form_submit_button("Predict Revenue", use_container_width=True)
+        submitted = st.form_submit_button("Forecast Revenue", use_container_width=True)
 
     if submitted:
-        with st.spinner("Asking the model..."):
+        with st.spinner("Running forecast..."):
             result = api_post("/predict/", {
                 "category": category,
                 "region": region,
-                "month": month,
-                "day_of_week": day_of_week,
-                "week_of_year": 1,
+                "month": MONTH_OPTIONS[month_name],
+                "year": year,
             })
         if result:
-            st.success(f"**Predicted Revenue: ${result['predicted_revenue']:,.2f}**")
+            st.success(
+                f"**Forecasted Revenue for {month_name} {year} — "
+                f"{category} / {region}: ${result['predicted_revenue']:,.0f}**"
+            )
             st.caption(result["confidence_note"])
-
-            c1, c2 = st.columns(2)
-            c1.metric("Model R²", f"{result['model_r2']:.3f}")
-            c2.metric("Model MAE", f"${result['model_mae']:,.2f}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,7 +194,7 @@ with tab3:
             with st.spinner("Asking the LLM..."):
                 result = api_get("/insights/summary")
             if result:
-                st.write(result["summary"])
+                st.write(clean_llm_text(result["summary"]))
 
     with col_qa:
         st.markdown("**💬 Ask a Question**")
@@ -193,5 +206,5 @@ with tab3:
             with st.spinner("Thinking..."):
                 result = api_post("/insights/query", {"question": question})
             if result:
-                st.info(f"**Q:** {result['question']}")
-                st.write(f"**A:** {result['answer']}")
+                st.info(f"Q: {result['question']}")
+                st.write(clean_llm_text(result["answer"]))
