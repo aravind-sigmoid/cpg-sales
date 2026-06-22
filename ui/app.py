@@ -11,9 +11,19 @@ from __future__ import annotations
 import os
 import sys
 
+import re
+
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+
+
+def clean_llm_text(text: str) -> str:
+    """Strip markdown symbols so st.write() renders plain wrapping prose."""
+    text = re.sub(r'[*_`#]', '', text)       # remove bold/italic/code/heading markers
+    text = re.sub(r'^\s*[-•]\s+', '', text, flags=re.MULTILINE)  # remove bullet dashes
+    text = re.sub(r'\n{3,}', '\n\n', text)   # collapse excessive blank lines
+    return text.strip()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -184,7 +194,7 @@ with tab3:
             with st.spinner("Asking the LLM..."):
                 result = api_get("/insights/summary")
             if result:
-                st.write(result["summary"])
+                st.write(clean_llm_text(result["summary"]))
 
     with col_qa:
         st.markdown("**💬 Ask a Question**")
@@ -196,5 +206,5 @@ with tab3:
             with st.spinner("Thinking..."):
                 result = api_post("/insights/query", {"question": question})
             if result:
-                st.info(f"**Q:** {result['question']}")
-                st.write(f"**A:** {result['answer']}")
+                st.info(f"Q: {result['question']}")
+                st.write(clean_llm_text(result["answer"]))

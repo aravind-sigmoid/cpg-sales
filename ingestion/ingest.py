@@ -130,21 +130,21 @@ def ingest_transactions(
             if "source_system" in valid_df.columns
             else "UNKNOWN"
         )
-        records = [
+        records = _native_types([
             {
-                "transaction_id": row.transaction_id,
+                "transaction_id": str(row.transaction_id),
                 "transaction_date": row.transaction_date,
-                "sku": row.sku,
+                "sku": str(row.sku),
                 "quantity": int(row.quantity),
                 "unit_price": float(row.unit_price),
                 "revenue": float(row.revenue),
-                "region": _lookup_region(row.store_id, session),
-                "store_id": row.store_id,
-                "source_system": row.source_system if hasattr(row, "source_system") else "UNKNOWN",
+                "region": _lookup_region(str(row.store_id), session),
+                "store_id": str(row.store_id),
+                "source_system": str(row.source_system) if hasattr(row, "source_system") else "UNKNOWN",
                 "ingested_at": datetime.utcnow(),
             }
             for row in valid_df.itertuples()
-        ]
+        ])
         stmt = insert(SalesTransaction).values(records)
         stmt = stmt.on_conflict_do_nothing(
             constraint="uq_txn_source"
@@ -156,10 +156,10 @@ def ingest_transactions(
     # Audit log
     log_entry = IngestionLog(
         source_file=os.path.basename(file_path),
-        rows_received=stats.rows_received,
-        rows_valid=stats.rows_valid,
-        rows_rejected=stats.rows_rejected,
-        rows_duplicate=stats.rows_duplicate,
+        rows_received=int(stats.rows_received),
+        rows_valid=int(stats.rows_valid),
+        rows_rejected=int(stats.rows_rejected),
+        rows_duplicate=int(stats.rows_duplicate),
         notes=str(stats.rejection_reasons),
     )
     session.add(log_entry)

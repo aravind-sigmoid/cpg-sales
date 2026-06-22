@@ -29,6 +29,7 @@ class ValidationStats:
     rejection_reasons: dict = field(default_factory=dict)
 
     def add_rejection(self, reason: str, count: int) -> None:
+        count = int(count)  # guard against numpy.int64 from pd.Series.sum()
         self.rejection_reasons[reason] = self.rejection_reasons.get(reason, 0) + count
         self.rows_rejected += count
 
@@ -158,8 +159,7 @@ def validate_transactions(
     # ── 9. Deduplication (transaction_id + source_system) ─────────────────────
     before_dedup = len(df)
     df = df.drop_duplicates(subset=["transaction_id", "source_system"], keep="first")
-    dupes = before_dedup - len(df)
-    stats.rows_duplicate = dupes
+    stats.rows_duplicate = int(before_dedup - len(df))
 
     # ── 10. Derive revenue ────────────────────────────────────────────────────
     df["revenue"] = (df["quantity"] * df["unit_price"]).round(2)
