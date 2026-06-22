@@ -1,11 +1,11 @@
 """
-Inference module — loads the trained model and returns revenue predictions.
+Inference module — predicts total monthly revenue for a
+category / region / year+month combination.
 """
 from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Optional
 
 import joblib
 import pandas as pd
@@ -20,39 +20,32 @@ def _load_model():
         raise FileNotFoundError(
             "Model not found. Run `python ml/train.py` first."
         )
-    model = joblib.load(MODEL_PATH)
-    meta = joblib.load(META_PATH)
-    return model, meta
+    return joblib.load(MODEL_PATH), joblib.load(META_PATH)
 
 
 def predict_revenue(
     category: str,
     region: str,
     month: int,
-    quarter: Optional[int] = None,
-    day_of_week: int = 0,
-    week_of_year: int = 1,
+    year: int = 2025,
 ) -> dict:
     """
-    Predict revenue for a given category / region / time combination.
+    Predict total monthly revenue for a category / region / month.
 
-    Returns a dict with:
-        predicted_revenue  - model output
-        model_mae          - training MAE for confidence context
+    Returns:
+        predicted_revenue  - forecasted total revenue for that month
+        model_mae          - training MAE (same units: $)
         model_r2           - training R²
     """
     model, meta = _load_model()
     feature_cols: list[str] = meta["feature_cols"]
 
-    if quarter is None:
-        quarter = (month - 1) // 3 + 1
+    quarter = (month - 1) // 3 + 1
 
-    # Build a row with the same structure used during training
     row = {col: 0 for col in feature_cols}
     row["month"] = month
     row["quarter"] = quarter
-    row["day_of_week"] = day_of_week
-    row["week_of_year"] = week_of_year
+    row["year"] = year
 
     cat_col = f"category_{category}"
     region_col = f"region_{region}"
@@ -65,7 +58,7 @@ def predict_revenue(
     predicted = float(model.predict(X)[0])
 
     return {
-        "predicted_revenue": round(predicted, 2),
+        "predicted_revenue": round(max(predicted, 0.0), 2),
         "model_mae": round(meta["mae"], 2),
         "model_r2": round(meta["r2"], 4),
     }

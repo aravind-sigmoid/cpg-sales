@@ -46,9 +46,9 @@ SOURCE_SYSTEMS = ["POS_NORTH", "POS_SOUTH", "ONLINE", "POS_WEST"]
 
 NUM_SKUS = 50
 NUM_STORES = 40
-NUM_TRANSACTIONS = 8000
+NUM_TRANSACTIONS = 30000   # larger dataset so monthly aggregates have ~900 rows
 START_DATE = datetime(2023, 1, 1)
-END_DATE = datetime(2024, 12, 31)
+END_DATE = datetime(2025, 12, 31)
 
 
 # ── Product catalog ───────────────────────────────────────────────────────────
